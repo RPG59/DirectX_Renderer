@@ -11,8 +11,8 @@ private:
 	
 	UINT32 m_Size = 0;
 public:
-	DXBuffer();
-	void Resize(UINT32 bufferSize);
+	DXBuffer(size_t);
+	void Resize(float*);
 	void SetLayout(LPVOID bufferPointer, SIZE_T bufferSize);
 	void Bind();
 	void SetData(UINT32 size, const void* data);

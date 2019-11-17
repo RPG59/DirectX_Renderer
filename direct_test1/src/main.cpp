@@ -1,5 +1,5 @@
 #include <windows.h>
-#include <d3d11.h>
+#include <d3d11_1.h>
 #include <d3dcompiler.h>
 #include <DirectXMath.h>
 
@@ -7,37 +7,61 @@
 #include <iostream>
 #include <fstream>
 #include <iterator>
+#include <memory>
+#include <vector>
 
 #include "D3DContext.h"
 #include "DXBuffer.h"
 #include "DXIndexBuffer.h"
 
-#pragma comment (lib, "d3d11.lib")
+#include "Renderable2D.h"
+
+#include "Texture.h"
+
+#pragma comment (lib, "D3D11.lib")
 #pragma comment (lib, "d3dcompiler.lib")
+#pragma comment (lib, "DirectXTK.lib")
 
 using namespace DirectX;
 
+
 struct VERTEX { FLOAT X, Y, Z;  float Color[4]; };
+std::vector<Renderable2D> sprites;
 VERTEX OurVertices[] =
 {
-	{0.45, 0.5f, 0.0f, 1.0f, 0.0f, 1.0f, 1.0f},
-	{0.45f, -0.5, 0.0f, 0.0f, 1.0f, 0.0f, 1.0f},
-	{-0.45f, -0.5f, 0.0f, 0.0f, 0.0f, 1.0f, 1.0f},
-	{-0.45f, 0.5f, 0.0f, 0.0f, 0.0f, 1.0f, 1.0f}
+	{0.5, 0.5f, 0.0f, 1.0f, 0.0f, 1.0f, 1.0f},
+	{0.5f, -0.5, 0.0f, 0.0f, 1.0f, 0.0f, 1.0f},
+	{-0.5f, -0.5f, 0.0f, 0.0f, 0.0f, 1.0f, 1.0f},
+	{-0.5f, 0.5f, 0.0f, 0.0f, 0.0f, 1.0f, 1.0f}
 };
+
+POINT pt;
+
+
 
 struct VS_CONSTANT_BUFFER
 {
 	XMFLOAT4X4 mWorldViewProj;
-	XMFLOAT4 vSomeVectorThatMayBeNeededByASpecificShader;
 	float fSomeFloatThatMayBeNeededByASpecificShader;
 	float fTime;
-	float fSomeFloatThatMayBeNeededByASpecificShader2;
-	float fSomeFloatThatMayBeNeededByASpecificShader3;
+	int curspX;
+	int curspY;
 };
 
+struct PS_CONSTANT_BUFFER
+{
+	int posx;
+	int posy;
+	int foo1;
+	int foo2;
+};
+
+std::shared_ptr<PS_CONSTANT_BUFFER> pFSUniformBuffer = nullptr;
+std::shared_ptr<VS_CONSTANT_BUFFER> pUniformBuffer = nullptr;
+
 //ID3D11Buffer* g_pIndexBuffer = NULL;
-ID3D11Buffer* g_pConstantBuffer11 = NULL;
+ID3D11Buffer* g_pConstantBuffer11 = nullptr;
+ID3D11Buffer* g_pConstantBuffer22 = nullptr;
 
 //DXBuffer* buffer = new DXBuffer();
 
@@ -46,13 +70,15 @@ ID3D11Buffer* g_pConstantBuffer11 = NULL;
 
 using std::string;
 ID3DBlob* Compile(const string source, const string profile, const string main);
+void SetUniform(void* data, UINT size, void* data2, UINT size2);
+void SetMatrix();
 
 //UINT16 indices[] = {
 //	0, 1, 2,
 //	2, 3, 1
 //};
 
-DXBuffer* buffer = new DXBuffer();
+//DXBuffer* buffer = new DXBuffer();
 DXIndexBuffer* indexBuffer = nullptr;
 
 ID3D11VertexShader* pVS;               // the pointer to the vertex shader
@@ -63,6 +89,9 @@ void RenderFrame(void);     // renders a single frame
 //void CleanD3D(void);        // closes Direct3D and releases memory
 void InitGraphics(void);    // creates the shape to render
 void InitPipeline(void);    // loads and prepares the shaders
+
+
+Texture texture = Texture();
 
 LRESULT CALLBACK WindowProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam);
 
@@ -108,6 +137,7 @@ int WINAPI WinMain(HINSTANCE hInstance,
 
 	InitPipeline();
 	InitGraphics();
+	SetMatrix();
 
 
 
@@ -115,6 +145,18 @@ int WINAPI WinMain(HINSTANCE hInstance,
 	// enter the main loop:
 
 	MSG msg;
+	memset(pUniformBuffer.get(), NULL, sizeof(VS_CONSTANT_BUFFER));
+	memset(pFSUniformBuffer.get(), NULL, sizeof(PS_CONSTANT_BUFFER));
+	pUniformBuffer->fTime = .4f;
+
+
+
+
+
+
+
+
+
 
 	while (TRUE)
 	{
@@ -126,6 +168,15 @@ int WINAPI WinMain(HINSTANCE hInstance,
 			if (msg.message == WM_QUIT)
 				break;
 		}
+
+		GetCursorPos(&pt);
+		pUniformBuffer->curspX = pt.x;
+		pUniformBuffer->curspY = pt.y;
+		pFSUniformBuffer->posx = pt.x;
+		pFSUniformBuffer->posy = pt.y;
+		SetMatrix();
+		SetUniform(reinterpret_cast<void*>(pUniformBuffer.get()), sizeof(VS_CONSTANT_BUFFER), reinterpret_cast<void*>(pFSUniformBuffer.get()), sizeof(PS_CONSTANT_BUFFER));
+
 
 		RenderFrame();
 	}
@@ -158,17 +209,25 @@ void RenderFrame(void)
 	const float color[] = { 0.0f, 0.0f, 0.0f, 1.0f };
 	D3DContext::GetDevContext()->ClearRenderTargetView(D3DContext::GetBackBuffer(), color);
 
+	for (Renderable2D sprite : sprites)
+	{
 
-	buffer->Bind();
-	indexBuffer->Bind();
-	//D3DContext::GetDevContext()->IASetIndexBuffer(g_pIndexBuffer, DXGI_FORMAT_R32_UINT, 0);
+		sprite.BindVAO();
+		//buffer->Bind();
+		indexBuffer->Bind();
+		//D3DContext::GetDevContext()->IASetIndexBuffer(g_pIndexBuffer, DXGI_FORMAT_R32_UINT, 0);
 
-	// select which primtive type we are using
-	D3DContext::GetDevContext()->IASetPrimitiveTopology(D3D11_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
+		// select which primtive type we are using
+		D3DContext::GetDevContext()->IASetPrimitiveTopology(D3D11_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
 
-	// draw the vertex buffer to the back buffer
-	D3DContext::GetDevContext()->DrawIndexed(6, 0, 0);
-	//D3DContext::GetDevContext()->Draw(3, 0);
+		// draw the vertex buffer to the back buffer
+		
+		D3DContext::GetDevContext()->PSSetSamplers(0, 1, texture.getSamplerState());
+
+		D3DContext::GetDevContext()->DrawIndexed(6, 0, 0);
+		//D3DContext::GetDevContext()->Draw(3, 0);
+
+	}
 
 	// switch the back buffer and the front buffer
 	HRESULT hr;
@@ -199,15 +258,14 @@ void RenderFrame(void)
 void InitGraphics()
 {
 	UINT16 indices[] = { 0, 1, 2, 3, 0, 2 };
-	buffer->Resize(sizeof(VERTEX) * 3);
+	//buffer->Resize(sizeof(VERTEX) * 3);
 	indexBuffer = new DXIndexBuffer(indices, 6);
-	
-	VS_CONSTANT_BUFFER VsConstData;
-	VsConstData.vSomeVectorThatMayBeNeededByASpecificShader = XMFLOAT4(1, 2, 3, 4);
-	VsConstData.fSomeFloatThatMayBeNeededByASpecificShader = 3.0f;
-	VsConstData.fTime = 0.2f;
-	VsConstData.fSomeFloatThatMayBeNeededByASpecificShader2 = 2.0f;
-	VsConstData.fSomeFloatThatMayBeNeededByASpecificShader3 = 4.0f;
+
+	pUniformBuffer = std::make_shared<VS_CONSTANT_BUFFER>();
+	pUniformBuffer->fSomeFloatThatMayBeNeededByASpecificShader = 3.0f;
+	pUniformBuffer->fTime = 0.2f;
+	pUniformBuffer->curspX = 0;
+	pUniformBuffer->curspY = 0;
 
 	// Fill in a buffer description.
 	D3D11_BUFFER_DESC cbDesc;
@@ -220,7 +278,7 @@ void InitGraphics()
 
 	// Fill in the subresource data.
 	D3D11_SUBRESOURCE_DATA InitData;
-	InitData.pSysMem = &VsConstData;
+	InitData.pSysMem = pUniformBuffer.get();
 	InitData.SysMemPitch = 0;
 	InitData.SysMemSlicePitch = 0;
 
@@ -232,8 +290,26 @@ void InitGraphics()
 	}
 	D3DContext::GetDevContext()->VSSetConstantBuffers(0, 1, &g_pConstantBuffer11);
 
+	texture.createTexturne(L"test.png");
 
-
+	pFSUniformBuffer = std::make_shared<PS_CONSTANT_BUFFER>();
+	pFSUniformBuffer->posx = 1;
+	pFSUniformBuffer->posy = 10;
+	D3D11_BUFFER_DESC cbDesc1;
+	cbDesc1.ByteWidth = sizeof(PS_CONSTANT_BUFFER);
+	cbDesc1.Usage = D3D11_USAGE_DYNAMIC;
+	cbDesc1.BindFlags = D3D11_BIND_CONSTANT_BUFFER;
+	cbDesc1.CPUAccessFlags = D3D11_CPU_ACCESS_WRITE;
+	cbDesc1.MiscFlags = 0;
+	cbDesc1.StructureByteStride = 0;
+	InitData.pSysMem = pFSUniformBuffer.get();
+	hr = D3DContext::GetDevice()->CreateBuffer(&cbDesc1, &InitData, &g_pConstantBuffer22);
+	if (FAILED(hr))
+	{
+		DebugBreak();
+	}
+	D3DContext::GetDevContext()->PSSetConstantBuffers(1, 1, &g_pConstantBuffer22);
+	SetUniform(reinterpret_cast<void*>(pUniformBuffer.get()), sizeof(VS_CONSTANT_BUFFER), reinterpret_cast<void*>(pFSUniformBuffer.get()), sizeof(PS_CONSTANT_BUFFER));
 
 
 	//buffer->SetData(sizeof(OurVertices), OurVertices);
@@ -286,7 +362,16 @@ void InitPipeline()
 	D3DContext::GetDevContext()->VSSetShader(pVS, 0, 0);
 	D3DContext::GetDevContext()->PSSetShader(pPS, 0, 0);
 
-	buffer->SetLayout(VS->GetBufferPointer(), VS->GetBufferSize());
+	for (float x = -4; x < 4; x += .1)
+	{
+		for (float y = -3.; y < 3.; y += .1f)
+		{
+			sprites.push_back(Renderable2D(XMFLOAT3(x, y, 0.f), XMFLOAT2(.08f, .08f), VS->GetBufferPointer(), VS->GetBufferSize()));
+		}
+	}
+
+	//buffer->SetLayout(VS->GetBufferPointer(), VS->GetBufferSize());
+
 }
 
 ID3DBlob* Compile(const string source, const string profile, const string main)
@@ -309,3 +394,26 @@ ID3DBlob* Compile(const string source, const string profile, const string main)
 	}
 	return shaderBlob;
 }
+
+void SetUniform(void* data, UINT size, void* data2, UINT size2)
+{
+	D3D11_MAPPED_SUBRESOURCE msr;
+	memset(&msr, NULL, sizeof(D3D11_MAPPED_SUBRESOURCE));
+
+	D3DContext::GetDevContext()->Map(g_pConstantBuffer11, NULL, D3D11_MAP_WRITE_DISCARD, NULL, &msr);
+	memcpy(msr.pData, data, size);
+	D3DContext::GetDevContext()->Unmap(g_pConstantBuffer11, NULL);
+
+	D3D11_MAPPED_SUBRESOURCE msr2;
+	memset(&msr2, NULL, sizeof(D3D11_MAPPED_SUBRESOURCE));
+	D3DContext::GetDevContext()->Map(g_pConstantBuffer22, NULL, D3D11_MAP_WRITE_DISCARD, NULL, &msr2);
+	memcpy(msr2.pData, data2, size2);
+	D3DContext::GetDevContext()->Unmap(g_pConstantBuffer22, NULL);
+}
+
+void SetMatrix()
+{
+	XMMATRIX matrix = DirectX::XMMatrixOrthographicRH(4.f, 3.f, 0.f, 100.f);
+	XMStoreFloat4x4(&(pUniformBuffer->mWorldViewProj), matrix);
+}
+
